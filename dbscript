@@ -1,0 +1,35 @@
+# Define variables
+$serverName = "localhost"
+$backupFolder = "C:\Backup"
+$databases = @("Database1", "Database2", "Database3")  # Add all your databases here
+
+foreach ($databaseName in $databases) {
+    $backupFile = "$backupFolder\$databaseName-$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+    
+    # Run SQL Server Backup Command for each database
+    Invoke-Sqlcmd -Query "BACKUP DATABASE [$databaseName] TO DISK = N'$backupFile' WITH INIT" -ServerInstance $serverName
+
+    Write-Host "Backup for $databaseName completed successfully. File saved to: $backupFile"
+}
+
+
+# BackupDatabases.ps1
+
+# Define variables
+$serverName = $env:SQLServer  # Get the server name from environment variables
+$backupFolder = "C:\Backup"  # Ensure this directory exists or change it to a valid path
+$databases = @("Database1", "Database2", "Database3")  # List of your databases
+$sqlUser = $env:SQLUser  # Get the SQL user from environment variables
+$sqlPassword = $env:SQLPassword  # Get the SQL password from environment variables
+
+foreach ($databaseName in $databases) {
+    $backupFile = "$backupFolder\$databaseName-$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+    
+    # Run SQL Server Backup Command for each database using sqlcmd
+    $query = "BACKUP DATABASE [$databaseName] TO DISK = N'$backupFile' WITH INIT"
+    
+    # Authenticate and run the query using sqlcmd
+    sqlcmd -S $serverName -U $sqlUser -P $sqlPassword -Q $query
+
+    Write-Host "Backup for $databaseName completed successfully. File saved to: $backupFile"
+}
