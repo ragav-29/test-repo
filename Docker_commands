@@ -12,3 +12,22 @@ done
 
 docker stop $(docker ps -aq)
 DOCKER rm $(docker ps -aq)
+
+
+================================================
+Create additional EBS Volume / diskstorage, fdisk and mount it
+
+#Commands
+sudo systemctl stop docker.service
+sudo systemctl stop docker.socket
+sudo anao /lib/systemd/system/docker.service  #Add the following line in custom directory
+
+#ExecStart=/usr/bin/dockerd -H fd://  --containerd=/run/continerd/containerd.sock
+ExecStart=/usr/bin/dockerd -data-root /dockerdata -H fd://  --containerd=/run/continerd/containerd.sock
+
+sudo rsync -aqXP /var/lib/docker/ /dockerdata
+sudo systemctl daemon-reload && sudo systemctl start docker
+sudo systemctl status docker --no-pager
+ps aux | grep -i docker | grep -v grep
+
+UUID: ---.
