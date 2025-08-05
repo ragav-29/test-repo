@@ -1,0 +1,7 @@
+sudo apt install certbot python3-certbot-nginx -y
+sudo nano /etc/nginx/sites-available/admin-dashboard.conf  # add config
+sudo ln -s /etc/nginx/sites-available/admin-dashboard.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot --nginx -d admin.yourdomain.com
+sudo certbot renew --dry-run
