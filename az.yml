@@ -1,0 +1,74 @@
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  deployPath: /var/www
+
+jobs:
+- deployment: DeployToProd
+  displayName: 'Deploy to production'
+  environment: 'prod-vm-env'  # Azure Environment name
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        - checkout: self
+
+        - task: NodeTool@0
+          inputs:
+            versionSpec: '18.x'
+          displayName: 'Install Node.js'
+
+        # Build frontend (Next.js)
+        - script: |
+            cd frontend
+            npm ci
+            npm run build
+            rm -rf ${{ variables.deployPath }}/frontend/*
+            cp -r out/* ${{ variables.deployPath }}/frontend/
+          displayName: 'Build and deploy frontend (Next.js)'
+
+        # Build Helpcenter (Vite SPA)
+        - script: |
+            cd helpcenter
+            npm ci
+            npm run build
+            rm -rf ${{ variables.deployPath }}/helpcenter/*
+            cp -r dist/* ${{ variables.deployPath }}/helpcenter/
+          displayName: 'Build and deploy Helpcenter'
+
+        # Build Admin Panel (Vite SPA)
+        - script: |
+            cd admin
+            npm ci
+            npm run build
+            rm -rf ${{ variables.deployPath }}/admin/*
+            cp -r dist/* ${{ variables.deployPath }}/admin/
+          displayName: 'Build and deploy Admin Panel'
+
+        # Deploy Backend API
+        - script: |
+            cd api
+            npm ci --omit=dev
+            rm -rf ${{ variables.deployPath }}/api/*
+            cp -r * ${{ variables.deployPath }}/api/
+            cd ${{ variables.deployPath }}/api
+            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
+          displayName: 'Deploy and restart Backend API'
+
+        # Deploy Notification Service
+        - script: |
+            cd notification
+            npm ci --omit=dev
+            rm -rf ${{ variables.deployPath }}/notification/*
+            cp -r * ${{ variables.deployPath }}/notification/
+            cd ${{ variables.deployPath }}/notification
+            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
+          displayName: 'Deploy and restart Notification Service'
+
+        # Optional: Reload Nginx
+        - script: |
+            sudo nginx -t && sudo systemctl reload nginx
+          displayName: 'Reload Nginx'
