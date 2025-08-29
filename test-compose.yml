@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQLDB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQLDB_DATABASE}
+      MYSQL_USER: ${MYSQLDB_USER}
+      MYSQL_PASSWORD: ${MYSQLDB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - backend
+
+  api-server:
+    build:
+      context: ./api-server
+    image: ragav29.azurecr.io/api-server:${IMAGE_TAG}
+    restart: always
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: ${MYSQLDB_USER}
+      DB_PASSWORD: ${MYSQLDB_PASSWORD}
+      DB_NAME: ${MYSQLDB_DATABASE}
+      NOTIFICATION_URL: http://notification:5000
+    depends_on:
+      - db
+      - notification
+    networks:
+      - backend
+      - frontend
+
+  notification:
+    build:
+      context: ./notification
+    image: ragav29.azurecr.io/notification:${IMAGE_TAG}
+    restart: always
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: ${MYSQLDB_USER}
+      DB_PASSWORD: ${MYSQLDB_PASSWORD}
+      DB_NAME: ${MYSQLDB_DATABASE}
+    depends_on:
+      - db
+    networks:
+      - backend
+
+  frontend-nextjs:
+    build:
+      context: ./frontend-nextjs
+    image: ragav29.azurecr.io/frontend-nextjs:${IMAGE_TAG}
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      API_URL: http://api-server:4000
+    depends_on:
+      - api-server
+    networks:
+      - frontend
+
+  admin-panel:
+    build:
+      context: ./admin-react-vite
+    image: ragav29.azurecr.io/admin-panel:${IMAGE_TAG}
+    restart: always
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      API_URL: http://api-server:4000
+    depends_on:
+      - api-server
+    networks:
+      - frontend
+
+  helpcenter:
+    build:
+      context: ./helpcenter-react-vite
+    image: ragav29.azurecr.io/helpcenter:${IMAGE_TAG}
+    restart: always
+    ports:
+      - "5174:5174"
+    environment:
+      API_URL: http://api-server:4000
+    depends_on:
+      - api-server
+    networks:
+      - frontend
+
+volumes:
+  db_data:
+
+networks:
+  backend:
+  frontend:
