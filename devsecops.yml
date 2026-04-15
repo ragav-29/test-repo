@@ -1,0 +1,280 @@
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+
+# ================= SONARQUBE =================
+- stage: SonarQube
+  displayName: "Code Quality - SonarQube"
+  jobs:
+  - job: Analyze
+    steps:
+
+    - task: SonarQubePrepare@5
+      inputs:
+        SonarQube: 'SonarQube'
+        scannerMode: 'CLI'
+        configMode: 'manual'
+        cliProjectKey: 'nextjs-frontend'
+        cliSources: 'frontend'
+
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+
+    - script: |
+        cd frontend
+        npm install
+        npm run test -- --coverage || true
+      displayName: Frontend Tests
+
+    - task: SonarQubeAnalyze@5
+    - task: SonarQubePublish@5
+
+    - task: SonarQubePrepare@5
+      inputs:
+        SonarQube: 'SonarQube'
+        scannerMode: 'CLI'
+        configMode: 'manual'
+        cliProjectKey: 'python-backend'
+        cliSources: 'backend'
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.11'
+
+    - script: |
+        cd backend
+        pip install -r requirements.txt
+        pytest --cov=. --cov-report=xml || true
+      displayName: Backend Tests
+
+    - task: SonarQubeAnalyze@5
+    - task: SonarQubePublish@5
+
+
+# ================= SAST =================
+- stage: SAST
+  displayName: "Security SAST"
+  jobs:
+  - job: Bandit
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.11'
+
+    - script: |
+        pip install bandit jq
+        mkdir -p reports
+        bandit -r backend -f json -o reports/bandit.json || true
+      displayName: Run Bandit
+
+    - script: |
+        set -euo pipefail
+        REPORT="reports/bandit.json"
+        SUMMARY="$(Pipeline.Workspace)/sast.md"
+
+        COUNT=$(jq '.results | length' $REPORT)
+
+        echo "## 🔍 SAST Scan - Bandit" > $SUMMARY
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo " No issues found." >> $SUMMARY
+        else
+          echo "**Total Issues:** $COUNT" >> $SUMMARY
+          echo "| Severity | Issue | File | Line |" >> $SUMMARY
+          echo "| :--- | :--- | :--- | :--- |" >> $SUMMARY
+
+          jq -r '.results[] | "| \(.issue_severity) | \(.issue_text) | \(.filename) | \(.line_number) |"' $REPORT >> $SUMMARY
+        fi
+
+        echo "##vso[task.addattachment type=Distributedtask.Core.Summary;name=SAST Report]$SUMMARY"
+      displayName: Publish Bandit Report
+
+
+# ================= SCA =================
+- stage: DependencyScan
+  displayName: "Security SCA"
+  dependsOn: SAST
+  jobs:
+  - job: SCA
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.11'
+
+    - script: |
+        pip install pip-audit jq
+        mkdir -p reports
+        pip-audit -r backend/requirements.txt -f json -o reports/pip.json || true
+      displayName: pip-audit
+
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+
+    - script: |
+        cd frontend
+        npm install
+        npm audit --json > ../reports/npm.json || true
+      displayName: npm audit
+
+    # Python report
+    - script: |
+        REPORT="reports/pip.json"
+        SUMMARY="$(Pipeline.Workspace)/sca-python.md"
+
+        COUNT=$(jq '[.dependencies[].vulns[]?] | length' $REPORT)
+
+        echo "##  Python Dependency Scan" > $SUMMARY
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo " No vulnerabilities found." >> $SUMMARY
+        else
+          echo "**Total Vulnerabilities:** $COUNT" >> $SUMMARY
+          echo "| Package | Version | CVE | Severity |" >> $SUMMARY
+          echo "| :--- | :--- | :--- | :--- |" >> $SUMMARY
+
+          jq -r '.dependencies[] | select(.vulns!=null) | . as $d | $d.vulns[] |
+          "| \($d.name) | \($d.version) | \(.id) | \(.severity // "UNKNOWN") |"' $REPORT >> $SUMMARY
+        fi
+
+        echo "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Python SCA]$SUMMARY"
+      displayName: Publish Python SCA
+
+    # npm report
+    - script: |
+        REPORT="reports/npm.json"
+        SUMMARY="$(Pipeline.Workspace)/sca-frontend.md"
+
+        COUNT=$(jq '.metadata.vulnerabilities.total' $REPORT || echo 0)
+
+        echo "## Frontend Dependency Scan" > $SUMMARY
+
+        jq -r '.metadata.vulnerabilities | to_entries[] | "| \(.key) | \(.value) |"' $REPORT >> $SUMMARY
+
+        echo "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Frontend SCA]$SUMMARY"
+      displayName: Publish npm report
+
+
+# ================= SECRETS =================
+- stage: Secrets
+  displayName: "Secrets Scan"
+  jobs:
+  - job: Gitleaks
+    steps:
+
+    - script: |
+        mkdir -p reports
+
+        docker run --rm \
+          -v $(System.DefaultWorkingDirectory):/repo \
+          zricethezav/gitleaks detect \
+          --source /repo \
+          --report-format json \
+          --report-path reports/gitleaks.json || true
+      displayName: Run Gitleaks
+
+    - script: |
+        REPORT="reports/gitleaks.json"
+        SUMMARY="$(Pipeline.Workspace)/secrets.md"
+
+        COUNT=$(jq '.findings | length' $REPORT)
+
+        echo "## Secrets Scan" > $SUMMARY
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "No secrets found." >> $SUMMARY
+        else
+          echo "**Secrets Found:** $COUNT" >> $SUMMARY
+          echo "| File | Rule | Line |" >> $SUMMARY
+          echo "| :--- | :--- | :--- |" >> $SUMMARY
+
+          jq -r '.findings[] | "| \(.file) | \(.ruleID) | \(.startLine) |"' $REPORT >> $SUMMARY
+        fi
+
+        echo "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Secrets Report]$SUMMARY"
+      displayName: Publish Secrets
+
+
+# ================= TESTS =================
+- stage: Tests
+  displayName: "Tests"
+  dependsOn: DependencyScan
+  jobs:
+  - job: Test
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.11'
+
+    - script: |
+        pip install -r backend/requirements.txt pytest pytest-cov
+        pytest backend --cov=backend --cov-report=xml
+      displayName: Run Tests
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: '**/junit.xml'
+
+    - task: PublishCodeCoverageResults@2
+      inputs:
+        summaryFileLocation: coverage.xml
+
+
+# ================= CONTAINER =================
+- stage: ContainerSecurity
+  displayName: "Container Security"
+  dependsOn: Tests
+  jobs:
+  - job: Trivy
+    steps:
+
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg lsb-release jq
+
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+        | gpg --dearmor \
+        | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+
+        echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+        | sudo tee /etc/apt/sources.list.d/trivy.list
+
+        sudo apt-get update
+        sudo apt-get install -y trivy
+      displayName: Install Trivy
+
+    - script: |
+        docker build -t app:$(Build.BuildId) .
+      displayName: Build Image
+
+    - script: |
+        mkdir -p reports
+
+        trivy image --format json -o reports/trivy.json app:$(Build.BuildId) || true
+      displayName: Scan Image
+
+    - script: |
+        REPORT="reports/trivy.json"
+        SUMMARY="$(Pipeline.Workspace)/trivy.md"
+
+        COUNT=$(jq '[.Results[].Vulnerabilities[]?] | length' $REPORT)
+
+        echo "## 🐳 Container Scan" > $SUMMARY
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "No vulnerabilities found." >> $SUMMARY
+        else
+          echo "**Total:** $COUNT" >> $SUMMARY
+        fi
+
+        echo "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Container Scan]$SUMMARY"
+      displayName: Publish Trivy
